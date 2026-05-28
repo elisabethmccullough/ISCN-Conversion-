@@ -1,0 +1,10 @@
+Sample_ID	Raw_ISCN	Extracted_Event	Event_Type	CHR	Band_Start	Band_End	BP1	BP2	TYPE	Status	Reason
+SIM001	46,XY,del(5)(q13q33)	del(5)(q13q33)	del	5	q13	q33	67000000	160500000	1	EMITTED	safe_conversion
+SIM002	46,XX,dup(7)(q21q31.33)	dup(7)(q21q31.33)	dup	7	q21	q31.33	77900000	127500000	3	EMITTED	safe_conversion
+SIM014	46,XX,del(6)(q21q25.3),dup(6)(p25.3p22.1)	del(6)(q21q25.3)	del	6	q21	q25.3	105000000	160600000	1	EMITTED	safe_conversion
+SIM014	46,XX,del(6)(q21q25.3),dup(6)(p25.3p22.1)	dup(6)(p25.3p22.1)	dup	6	p25.3	p22.1	0	30500000	3	EMITTED	safe_conversion
+SIM015	47,XY,+18,del(13)(q14.2q22.1)	del(13)(q14.2q22.1)	del	13	q14.2	q22.1	48000000	95000000	1	EMITTED	safe_conversion
+SIM015	47,XY,+18,del(13)(q14.2q22.1)	+18	whole_gain	18			0	80373285	3	EMITTED	safe_conversion
+SIM016	45,XX,-10,dup(4)(q12q21.3)	dup(4)(q12q21.3)	dup	4	q12	q21.3	48000000	90000000	3	EMITTED	safe_conversion
+SIM016	45,XX,-10,dup(4)(q12q21.3)	-10	whole_loss	10			0	133000000	1	EMITTED	safe_conversion
+SIM036	46,XX,del(99)(q13q33)	del(99)(q13q33)	del	99	q13	q33				FLAGGED	cytoband_lookup_failed
