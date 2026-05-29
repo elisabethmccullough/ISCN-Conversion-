@@ -1,0 +1,14 @@
+Sample_ID	Raw_ISCN	Extracted_Event	Status	Reason	Confidence	Notes
+SIM001	46,XY,del(5)(q13q33)	del(5)(q13q33)	EMITTED	safe_conversion	high	
+SIM002	46,XX,dup(7)(q21q31.33)	dup(7)(q21q31.33)	EMITTED	safe_conversion	high	
+SIM014	46,XX,del(6)(q21q25.3),dup(6)(p25.3p22.1)	del(6)(q21q25.3)	EMITTED	safe_conversion	high	
+SIM014	46,XX,del(6)(q21q25.3),dup(6)(p25.3p22.1)	dup(6)(p25.3p22.1)	EMITTED	safe_conversion	high	
+SIM015	47,XY,+18,del(13)(q14.2q22.1)	+18	EMITTED	safe_conversion	high	
+SIM015	47,XY,+18,del(13)(q14.2q22.1)	del(13)(q14.2q22.1)	EMITTED	safe_conversion	high	
+SIM016	45,XX,-10,dup(4)(q12q21.3)	-10	EMITTED	safe_conversion	high	
+SIM016	45,XX,-10,dup(4)(q12q21.3)	dup(4)(q12q21.3)	EMITTED	safe_conversion	high	
+SIM030	46,XX,del(5)(q?q33)	del(5)(q?q33)	EMITTED_APPROXIMATE	approximate_q_arm_start	low	Approximate conversion: uncertain q-arm start; used q-arm start through chromosome end.
+SIM032	46,XX,dup(7)(q21q31~q32)	dup(7)(q21q31~q32)	EMITTED_APPROXIMATE	approximate_endpoint_range	low	Approximate conversion: endpoint range collapsed to broad outer endpoint.
+SIM034	46,XX,t(9;22)(q34;q11.2)	t(9;22)(q34;q11.2)	FLAGGED	unsupported_or_balanced_event	low	Not converted; clear CNV events in same ISCN are still processed separately.
+SIM034	46,XX,t(9;22)(q34;q11.2)		SKIPPED	unsupported_or_balanced_event	low	No safely convertible CNV event
+SIM036	46,XX,del(99)(q13q33)	del(99)(q13q33)	FLAGGED	cytoband_lookup_failed	high	
