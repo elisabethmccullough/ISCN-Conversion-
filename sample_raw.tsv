@@ -1,0 +1,10 @@
+Sample_ID	ISCN
+SIM001	46,XY,del(5)(q13q33)
+SIM002	46,XX,dup(7)(q21q31.33)
+SIM014	46,XX,del(6)(q21q25.3),dup(6)(p25.3p22.1)
+SIM015	47,XY,+18,del(13)(q14.2q22.1)
+SIM016	45,XX,-10,dup(4)(q12q21.3)
+SIM030	46,XX,del(5)(q?q33)
+SIM032	46,XX,dup(7)(q21q31~q32)
+SIM034	46,XX,t(9;22)(q34;q11.2)
+SIM036	46,XX,del(99)(q13q33)
