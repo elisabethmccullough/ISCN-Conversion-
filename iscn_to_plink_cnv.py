@@ -8,6 +8,8 @@ from pathlib import Path
 TYPE_COLUMN = "TYPE (# of copies)"
 PLINK_COLUMNS = ["FID", "IID", "CHR", "BP1", "BP2", TYPE_COLUMN, "SCORE", "SITES"]
 REVIEW_COLUMNS = ["Sample_ID", "Raw_ISCN", "Extracted_Event", "Status", "Reason", "Confidence", "Notes"]
+DEBUG_COLUMNS = ["Sample_ID", "Raw_ISCN", "Extracted_Event", "Event_Type", "CHR", "Band_Start", "Band_End", "BP1", "BP2", TYPE_COLUMN, "Status", "Reason", "Confidence", "Notes"]
+SPREADSHEET_ERROR_VALUES = {"#NAME?", "#REF!"}
 DEBUG_COLUMNS = ["Sample_ID", "Raw_ISCN", "Extracted_Event", "Event_Type", "CHR", "Band_Start", "Band_End", "BP1", "BP2", TYPE_COLUMN, "Status", "Reason"]
 
 
@@ -90,12 +92,54 @@ def load_cytoband(path_or_url: str):
 
 def parse_del_dup_events(iscn: str):
     patt = re.compile(r"\b(del|dup)\(([^()]+)\)\(([pq][0-9.]+)([pq][0-9.]+)\)")
+    return [{"extracted_event": m.group(0), "event_type": m.group(1), "chr": m.group(2).strip(), "band_start": m.group(3), "band_end": m.group(4), "approximate": False, "notes": "", "pos": m.start()} for m in patt.finditer(iscn)]
+
+
+def parse_approximate_del_dup_events(iscn: str):
+    """Extract limited ambiguous del/dup events that still have mappable bands.
+
+    Supported conservative cases:
+    - del(5)(q?q33): missing/uncertain q-arm start, clear terminal-side band.
+    - dup(7)(q21q31~q32): clear start and approximate endpoint range.
+    """
+    events = []
+    patt = re.compile(r"\b(del|dup)\(([^()]+)\)\(([^()]*(?:\?|~)[^()]*)\)")
+    for m in patt.finditer(iscn):
+        body = m.group(3).strip()
+        event = {
+            "extracted_event": m.group(0),
+            "event_type": m.group(1),
+            "chr": m.group(2).strip(),
+            "band_start": "",
+            "band_end": "",
+            "approximate": True,
+            "notes": "",
+            "pos": m.start(),
+        }
+
+        missing_q_start = re.fullmatch(r"q\?([pq][0-9.]+)", body)
+        if missing_q_start:
+            event["band_start"] = "q?"
+            event["band_end"] = missing_q_start.group(1)
+            event["notes"] = "Approximate conversion: uncertain q-arm start; used q-arm start through chromosome end."
+            events.append(event)
+            continue
+
+        approx_endpoint = re.fullmatch(r"([pq][0-9.]+)([pq][0-9.]+)~([pq][0-9.]+)", body)
+        if approx_endpoint:
+            event["band_start"] = approx_endpoint.group(1)
+            event["band_end"] = approx_endpoint.group(3)
+            event["notes"] = "Approximate conversion: endpoint range collapsed to broad outer endpoint."
+            events.append(event)
+
+    return events
     return [{"extracted_event": m.group(0), "event_type": m.group(1), "chr": m.group(2).strip(), "band_start": m.group(3), "band_end": m.group(4)} for m in patt.finditer(iscn)]
 
 
 def parse_whole_chromosome_events(iscn: str):
     ev = []
     for m in re.finditer(r"(?<![0-9A-Za-z])([+-])(\d+|X|Y)(?![0-9A-Za-z.])", iscn):
+        ev.append({"extracted_event": m.group(0), "event_type": "whole_gain" if m.group(1) == "+" else "whole_loss", "chr": m.group(2), "band_start": "", "band_end": "", "pos": m.start()})
         ev.append({"extracted_event": m.group(0), "event_type": "whole_gain" if m.group(1) == "+" else "whole_loss", "chr": m.group(2), "band_start": "", "band_end": ""})
     return ev
 
@@ -116,6 +160,37 @@ def lookup_cytoband_coordinates(cyto, chr_code, band):
     return None, None, "band_not_found"
 
 
+def chromosome_span(cyto, chr_code):
+    """Return the minimum start and maximum end observed for a chromosome."""
+    rows = [r for r in cyto if r["chr"] == str(chr_code).replace("chr", "")]
+    if not rows:
+        return None, None
+    return min(r["start"] for r in rows), max(r["end"] for r in rows)
+
+
+def q_arm_span(cyto, chr_code):
+    """Return q-arm start and chromosome/q-arm end when cytoband rows support it."""
+    rows = [r for r in cyto if r["chr"] == str(chr_code).replace("chr", "") and str(r["band"]).startswith("q")]
+    if not rows:
+        return None, None
+    return min(r["start"] for r in rows), max(r["end"] for r in rows)
+
+
+def validate_output_value(value):
+    """Reject spreadsheet error/formula-like values from emitted TSV cells."""
+    text = str(value)
+    if text in SPREADSHEET_ERROR_VALUES:
+        return False
+    if text.startswith("="):
+        return False
+    return True
+
+
+def validate_output_row(row):
+    if any(not validate_output_value(row.get(col, "")) for col in PLINK_COLUMNS):
+        return False, "spreadsheet_error_or_formula_value"
+    try:
+        bp1, bp2 = int(row["BP1"]), int(row["BP2"])
 def validate_output_row(row):
     try:
         bp1, bp2 = int(row["BP1"]), int(row["BP2"])
@@ -255,6 +330,9 @@ def validate_output_row(row: Dict) -> Tuple[bool, str]:
     if not str(row.get("CHR", "")).strip():
         return False, "missing_chromosome"
     if row.get(TYPE_COLUMN) not in (1, 3):
+        return False, "unsupported_type"
+    if row.get("SCORE") != 999 or row.get("SITES") != 999:
+        return False, "score_sites_not_999"
     if str(row["CHR"]) in {"", "nan", "None"}:
         return False, "missing_chromosome"
     if int(row["TYPE"]) not in {0, 1, 3}:
@@ -324,6 +402,20 @@ def validate_written_plink_tsv(path):
     for i, row in enumerate(rows[1:], start=2):
         if len(row) != len(PLINK_COLUMNS):
             raise ValueError(f"TSV row {i} has {len(row)} columns; expected {len(PLINK_COLUMNS)}")
+        if any(cell in SPREADSHEET_ERROR_VALUES or str(cell).startswith("=") for cell in row):
+            raise ValueError(f"TSV row {i} contains a spreadsheet error or formula-like value")
+        if not row[0] or not row[1] or row[0] != row[1]:
+            raise ValueError(f"TSV row {i} has invalid FID/IID values")
+        try:
+            bp1, bp2 = int(row[3]), int(row[4])
+        except ValueError as e:
+            raise ValueError(f"TSV row {i} has non-integer BP1/BP2") from e
+        if bp1 >= bp2:
+            raise ValueError(f"TSV row {i} has BP1 >= BP2")
+        if row[5] not in {"1", "3"}:
+            raise ValueError(f"TSV row {i} has unsupported TYPE (# of copies)")
+        if row[6] != "999" or row[7] != "999":
+            raise ValueError(f"TSV row {i} has SCORE/SITES values other than 999")
         if not row[0] or not row[1] or row[0] != row[1]:
             raise ValueError(f"TSV row {i} has invalid FID/IID values")
 
@@ -335,6 +427,8 @@ def validate_written_plink_tsv(path):
     df = pd.read_csv(path, sep="\t")
     if list(df.columns) != PLINK_COLUMNS:
         raise ValueError(f"pandas read-back columns do not match expected columns: {list(df.columns)}")
+    if df.astype(str).isin(SPREADSHEET_ERROR_VALUES).any().any() or df.astype(str).apply(lambda col: col.str.startswith("=")).any().any():
+        raise ValueError("pandas read-back found spreadsheet error or formula-like values")
     if not (df["FID"].notna().all() and df["IID"].notna().all()):
         raise ValueError("pandas read-back found missing FID/IID values")
     if not (df["FID"].astype(str) == df["IID"].astype(str)).all():
@@ -343,6 +437,8 @@ def validate_written_plink_tsv(path):
         raise ValueError("pandas read-back found BP1 >= BP2")
     if not df[TYPE_COLUMN].isin([1, 3]).all():
         raise ValueError("pandas read-back found unsupported TYPE (# of copies)")
+    if not (df["SCORE"].astype(int).eq(999).all() and df["SITES"].astype(int).eq(999).all()):
+        raise ValueError("pandas read-back found SCORE/SITES values other than 999")
     if df.duplicated().any():
         raise ValueError("pandas read-back found duplicate rows")
     return "pandas"
@@ -394,6 +490,7 @@ def _unsupported_tokens(iscn: str):
     return tokens
 
 
+def _make_debug_row(sample_id, raw_iscn, event, bp1, bp2, copy_number, status, reason, confidence="low", notes=""):
 def _make_debug_row(sample_id, raw_iscn, event, bp1, bp2, copy_number, status, reason):
     """Build one standardized parser/debug row."""
     return {
@@ -409,6 +506,8 @@ def _make_debug_row(sample_id, raw_iscn, event, bp1, bp2, copy_number, status, r
         TYPE_COLUMN: copy_number,
         "Status": status,
         "Reason": reason,
+        "Confidence": confidence,
+        "Notes": notes,
     }
 
 
@@ -420,6 +519,11 @@ def convert(raw_rows, cyto):
     for rr in raw_rows:
         sid, raw = rr["Sample_ID"], rr["ISCN"]
 
+        simple_events = parse_del_dup_events(raw)
+        approximate_events = parse_approximate_del_dup_events(raw)
+        whole_events = parse_whole_chromosome_events(raw) if not any(x in raw for x in ["?", "~"]) else []
+        events = sorted(simple_events + approximate_events + whole_events, key=lambda ev: ev.get("pos", 0))
+
         # Question marks and approximate ranges make the whole ISCN unsafe to convert.
         if any(x in raw for x in ["?", "~"]):
             review.append(_review_row(sid, raw, "", "FLAGGED", "ambiguous_symbols", notes="Contains ? or ~"))
@@ -430,6 +534,10 @@ def convert(raw_rows, cyto):
         for token in unsupported:
             review.append(_review_row(sid, raw, token, "FLAGGED", "unsupported_or_balanced_event", notes="Not converted; clear CNV events in same ISCN are still processed separately."))
 
+        if any(x in raw for x in ["?", "~"]) and not approximate_events:
+            review.append(_review_row(sid, raw, "", "FLAGGED", "ambiguous_symbols", notes="Contains ? or ~ and no safely mappable del/dup pattern"))
+            continue
+
         if not events:
             reason = "unsupported_or_balanced_event" if unsupported else "non_cnv_or_no_safe_event"
             review.append(_review_row(sid, raw, "", "SKIPPED", reason, notes="No safely convertible CNV event"))
@@ -437,6 +545,39 @@ def convert(raw_rows, cyto):
 
         for ev in events:
             bp1 = bp2 = copy_number = None
+            confidence = "low" if ev.get("approximate") else "high"
+            reason = ""
+            notes = ev.get("notes", "")
+
+            if ev["event_type"] in {"del", "dup"}:
+                if ev.get("approximate") and ev["band_start"] == "q?":
+                    arm_start, arm_end = q_arm_span(cyto, ev["chr"])
+                    if None not in (arm_start, arm_end):
+                        bp1, bp2 = int(arm_start), int(arm_end)
+                        copy_number = 1 if ev["event_type"] == "del" else 3
+                        reason = "approximate_q_arm_start"
+                    else:
+                        reason = "cytoband_lookup_failed"
+                else:
+                    start1, end1, conf1 = lookup_cytoband_coordinates(cyto, ev["chr"], ev["band_start"])
+                    start2, end2, conf2 = lookup_cytoband_coordinates(cyto, ev["chr"], ev["band_end"])
+                    if None not in (start1, end1, start2, end2):
+                        # Use the outer span of the two cytoband lookups. This keeps
+                        # normal ranges unchanged and fixes reversed/cross-arm ranges
+                        # such as del(5)(q33q13) by retaining the full widths of both
+                        # endpoint bands before sorting coordinates.
+                        bp1 = min(int(start1), int(start2))
+                        bp2 = max(int(end1), int(end2))
+                        copy_number = 1 if ev["event_type"] == "del" else 3
+                        confidence = "low" if ev.get("approximate") else ("medium" if "medium" in (conf1, conf2) else "high")
+                        if ev.get("approximate"):
+                            reason = "approximate_endpoint_range"
+                    else:
+                        reason = "cytoband_lookup_failed"
+            else:
+                chrom_start, chrom_end = chromosome_span(cyto, ev["chr"])
+                if None not in (chrom_start, chrom_end):
+                    bp1, bp2 = chrom_start, chrom_end
             confidence = "low"
             reason = ""
 
@@ -478,6 +619,8 @@ def convert(raw_rows, cyto):
                 if ok and dedupe_key not in emitted_keys:
                     plink.append(row)
                     emitted_keys.add(dedupe_key)
+                    status = "EMITTED_APPROXIMATE" if ev.get("approximate") else "EMITTED"
+                    reason = reason or "safe_conversion"
                     status = "EMITTED"
                     reason = "safe_conversion"
                 elif ok:
@@ -486,6 +629,18 @@ def convert(raw_rows, cyto):
                 else:
                     reason = validation_reason
 
+            review.append(_review_row(sid, raw, ev["extracted_event"], status, reason, confidence, notes))
+            debug.append(_make_debug_row(sid, raw, ev, bp1, bp2, copy_number, status, reason, confidence, notes))
+
+    return plink, review, debug
+
+def _fake_cytobands():
+    """Small hg38-like cytoband table for built-in tests."""
+    return [
+        {"chr": "5", "start": 48800000, "end": 51000000, "band": "q11.1"},
+        {"chr": "5", "start": 67000000, "end": 70000000, "band": "q13"},
+        {"chr": "5", "start": 150000000, "end": 160500000, "band": "q33"},
+        {"chr": "5", "start": 177100000, "end": 181538259, "band": "q35.3"},
             review.append(_review_row(sid, raw, ev["extracted_event"], status, reason, confidence))
             debug.append(_make_debug_row(sid, raw, ev, bp1, bp2, copy_number, status, reason))
 
@@ -504,6 +659,7 @@ def _fake_cytobands():
         {"chr": "7", "start": 0, "end": 159000000, "band": "p11"},
         {"chr": "7", "start": 77900000, "end": 80000000, "band": "q21"},
         {"chr": "7", "start": 120000000, "end": 127500000, "band": "q31.33"},
+        {"chr": "7", "start": 127500000, "end": 132900000, "band": "q32"},
         {"chr": "8", "start": 0, "end": 145138636, "band": "p11"},
         {"chr": "10", "start": 0, "end": 133797422, "band": "p11"},
         {"chr": "12", "start": 0, "end": 3200000, "band": "p13.33"},
@@ -526,6 +682,9 @@ def run_tests():
         {"Sample_ID": "SORTED", "ISCN": "46,XX,del(5)(q33q13)"},
         {"Sample_ID": "DECIMAL_PREFIX", "ISCN": "46,XX,dup(12)(p13p11.2)"},
         {"Sample_ID": "BALANCED", "ISCN": "46,XX,t(9;22)(q34;q11.2)"},
+        {"Sample_ID": "SIM030", "ISCN": "46,XX,del(5)(q?q33)"},
+        {"Sample_ID": "SIM032", "ISCN": "46,XX,dup(7)(q21q31~q32)"},
+        {"Sample_ID": "AMBIG_UNSAFE", "ISCN": "46,XX,del(5)(q13?q33)"},
         {"Sample_ID": "AMBIG", "ISCN": "46,XX,del(5)(q13?q33)"},
         {"Sample_ID": "MIXED", "ISCN": "46,XX,t(9;22)(q34;q11.2),dup(7)(q21q31.33)"},
     ]
@@ -541,6 +700,16 @@ def run_tests():
     assert any(r["FID"] == "MULTI" and r["CHR"] == "6" and r["BP1"] == 0 and r["BP2"] == 30500000 and r[TYPE_COLUMN] == 3 for r in plink)
     assert any(r["FID"] == "DECIMAL_PREFIX" and r["BP1"] == 0 and r["BP2"] == 33200000 for r in plink)
     assert all(isinstance(r["BP1"], int) and isinstance(r["BP2"], int) and r["BP1"] < r["BP2"] for r in plink)
+    assert any(r["FID"] == "SORTED" and r["BP1"] == 67000000 and r["BP2"] == 160500000 for r in plink)
+    assert all(r["FID"] == r["IID"] and r["FID"] for r in plink)
+    validate_plink_rows(plink)
+    assert any(r["FID"] == "SIM030" and r["IID"] == "SIM030" and r["CHR"] == "5" and r["BP1"] == 48800000 and r["BP2"] == 181538259 and r[TYPE_COLUMN] == 1 for r in plink)
+    assert any(r["FID"] == "SIM032" and r["IID"] == "SIM032" and r["CHR"] == "7" and r["BP1"] == 77900000 and r["BP2"] == 132900000 and r[TYPE_COLUMN] == 3 for r in plink)
+    assert any(r["Sample_ID"] == "SIM030" and r["Status"] == "EMITTED_APPROXIMATE" for r in review)
+    assert any(r["Sample_ID"] == "SIM032" and r["Status"] == "EMITTED_APPROXIMATE" for r in review)
+    assert not any(r["FID"] in {"BALANCED", "AMBIG_UNSAFE"} for r in plink)
+    assert any(r["Sample_ID"] == "BALANCED" and r["Status"] in {"FLAGGED", "SKIPPED"} for r in review)
+    assert any(r["Sample_ID"] == "AMBIG_UNSAFE" and r["Status"] == "FLAGGED" for r in review)
     assert all(r["FID"] == r["IID"] and r["FID"] for r in plink)
     validate_plink_rows(plink)
     assert not any(r["FID"] in {"BALANCED", "AMBIG"} for r in plink)
@@ -594,6 +763,10 @@ def main():
     whole = sum(1 for r in debug if r["Event_Type"] in {"whole_gain", "whole_loss"} and r["Status"] == "EMITTED")
     print(f"Input samples: {len({r['Sample_ID'] for r in raw})}")
     print(f"CNV rows emitted: {len(plink)}")
+    print(f"Flagged/skipped event records: {sum(1 for r in review if r['Status'] not in {'EMITTED', 'EMITTED_APPROXIMATE'})}")
+    print(f"Deletion rows: {dels}")
+    print(f"Duplication rows: {dups}")
+    print(f"Whole-chromosome gain/loss rows: {whole}")
     print(f"Flagged/skipped event records: {sum(1 for r in review if r['Status'] != 'EMITTED')}")
     print(f"Deletion rows: {dels}")
     print(f"Duplication rows: {dups}")

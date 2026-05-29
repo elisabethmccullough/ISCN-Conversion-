@@ -135,6 +135,13 @@ The output directory will contain three files:
 | --- | --- |
 | `plink_cnv_output.tsv` | Safe converted CNV rows only. Columns are exactly `FID`, `IID`, `CHR`, `BP1`, `BP2`, `TYPE (# of copies)`, `SCORE`, `SITES`. |
 | `plink_cnv_output.csv` | Convenience comma-delimited copy of the main PLINK-style output for downloading/opening in spreadsheet software. |
+| `review_flags.tsv` | Every input row/event that was emitted, approximately emitted, skipped, or flagged, with a reason. |
+| `optional_debug_extracted_events.tsv` | Event-level debug table before final conversion, including `TYPE (# of copies)`, `Confidence`, and `Notes`. |
+
+
+The main `plink_cnv_output.tsv` is a plain tab-delimited text file. You can save or rename it as `.txt` without changing the file contents. It should not contain Excel formulas, spreadsheet error values such as `#NAME?` or `#REF!`, Git patch text, markdown, or notes.
+
+Some ambiguous-but-still-mappable ISCN events are emitted to the main PLINK table with a review/debug trail. For example, a deletion like `del(5)(q?q33)` can be emitted approximately from the chromosome 5 q-arm start through the chromosome end when the cytoband reference supports that inference, and a duplication like `dup(7)(q21q31~q32)` can be emitted through the broader q32 endpoint. These records are marked as `EMITTED_APPROXIMATE` in `review_flags.tsv` and `optional_debug_extracted_events.tsv`.
 | `review_flags.tsv` | Every input row/event that was emitted, skipped, or flagged, with a reason. |
 | `optional_debug_extracted_events.tsv` | Event-level debug table before final conversion, including `TYPE (# of copies)`. |
 
